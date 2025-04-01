@@ -1,16 +1,22 @@
 use crate::options;
 
 use anyhow::Result;
+
 use log::info;
-use log::warn;
-use nalgebra::clamp;
+// use log::warn;
+
+use clap::CommandFactory;
+
+// use nalgebra::clamp;
+
 use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
-use std::collections::HashMap;
+
+// use std::collections::HashMap;
+// use std::num::NonZero;
 use std::fs::File;
 use std::io::Write;
-use std::num::NonZero;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -155,14 +161,11 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
 
     let shape_ = shape.clone().apply_transform(mat.into());
 
-    // let mut depth = vec![];
-    // let mut color = vec![];
     let mut image = Default::default();
     for _ in 0..num_repeats {
         image = cfg.run(shape_.clone()).unwrap();
     }
 
-    // let out = match mode {
     let out = match mode {
         options::RenderMode3D::HeightMap => {
             let z_min = image.iter().map(|p| p.depth).min().unwrap_or(0);
@@ -179,7 +182,56 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
                     }
                 })
                 .collect()
-        } /*
+        }
+        options::RenderMode3D::NormalMap { denoise } => {
+            let image = if *denoise {
+                fidget::render::effects::denoise_normals(&image, threads)
+            } else {
+                image
+            };
+            image
+                .into_iter()
+                .flat_map(|p| {
+                    if p.depth > 0 {
+                        let c = p.to_color();
+                        [c[0], c[1], c[2], 255]
+                    } else {
+                        [0, 0, 0, 0]
+                    }
+                })
+                .collect()
+        } // options::ColorMode::ModelPosition => {
+          //     let img_size = settings.size;
+          //     let world_to_model: nalgebra::Matrix4<f32> = mat.into();
+          //     let screen_to_world: nalgebra::Matrix4<f32> = cfg.mat();
+          //     let screen_to_model = world_to_model * screen_to_world;
+          //     info!("Model position");
+          //     depth
+          //         .into_iter()
+          //         .enumerate()
+          //         .flat_map(|(xy_, d)| {
+          //             if d > 0 {
+          //                 let xy = xy_ as u32;
+          //                 let x_ = (xy % img_size) as f32;
+          //                 let y_ = (xy / img_size) as f32;
+          //                 let z_ = d as f32;
+          //                 let p_ = nalgebra::Vector4::new(x_, y_, z_, 1.0);
+          //                 let p = screen_to_model * p_;
+          //                 let red =
+          //                     if p[0] > 0.0 { (p[0] * 255.0) as u8 } else { 0 };
+          //                 let green =
+          //                     if p[1] > 0.0 { (p[1] * 255.0) as u8 } else { 0 };
+          //                 let blue =
+          //                     if p[2] > 0.0 { (p[2] * 255.0) as u8 } else { 0 };
+          //                 [red, green, blue, 255]
+          //             } else {
+          //                 [0, 0, 0, 0]
+          //             }
+          //         })
+          //         .collect()
+          // }
+
+          /*
           options::ColorMode::NearestSite => {
               let sites = make_positions(shape.clone(), 128, 16);
               let img_size = settings.size;
@@ -262,66 +314,7 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
               );
               foo
           }
-          options::ColorMode::CameraNormalMap => depth
-              .into_iter()
-              .zip(color)
-              .flat_map(|(d, c)| {
-                  if d > 0 {
-                      [c[0], c[1], c[2], 255]
-                  } else {
-                      [0, 0, 0, 0]
-                  }
-              })
-              .collect(),
 
-            options::ColorMode::ModelPosition => {
-                let img_size = settings.size;
-                let world_to_model: nalgebra::Matrix4<f32> = mat.into();
-                let screen_to_world: nalgebra::Matrix4<f32> = cfg.mat();
-                let screen_to_model = world_to_model * screen_to_world;
-                info!("Model position");
-                depth
-                    .into_iter()
-                    .enumerate()
-                    .flat_map(|(xy_, d)| {
-                        if d > 0 {
-                            let xy = xy_ as u32;
-                            let x_ = (xy % img_size) as f32;
-                            let y_ = (xy / img_size) as f32;
-                            let z_ = d as f32;
-                            let p_ = nalgebra::Vector4::new(x_, y_, z_, 1.0);
-                            let p = screen_to_model * p_;
-                            let red =
-                                if p[0] > 0.0 { (p[0] * 255.0) as u8 } else { 0 };
-                            let green =
-                                if p[1] > 0.0 { (p[1] * 255.0) as u8 } else { 0 };
-                            let blue =
-                                if p[2] > 0.0 { (p[2] * 255.0) as u8 } else { 0 };
-                            [red, green, blue, 255]
-                        } else {
-                            [0, 0, 0, 0]
-                        }
-                    })
-                    .collect()
-            },
-            RenderMode3D::Normals { denoise } => {
-                let image = if denoise {
-                    fidget::render::effects::denoise_normals(&image, threads)
-                } else {
-                    image
-                };
-                image
-                    .into_iter()
-                    .flat_map(|p| {
-                        if p.depth > 0 {
-                            let c = p.to_color();
-                            [c[0], c[1], c[2], 255]
-                        } else {
-                            [0, 0, 0, 0]
-                        }
-                    })
-                    .collect()
-            }
             RenderMode3D::Shaded { ssao, denoise } => {
                 let image = if denoise {
                     fidget::render::effects::denoise_normals(&image, threads)
@@ -749,7 +742,48 @@ pub fn run_action(
             use_default_camera,
             model_angle,
             model_scale,
+            ssao,
+            no_denoise,
         } => {
+            use options::Options;
+            use options::RenderMode3D;
+            use options::RenderMode3DArg;
+            // if *ssao
+            // /* && !matches!(mode, RenderMode3DArg::Shaded) */
+            // {
+            //     let mut cmd = Options::command();
+            //     let sub = cmd.find_subcommand_mut("render3d").unwrap();
+            //     let error = sub.error(
+            //         clap::error::ErrorKind::ArgumentConflict,
+            //         "`--ssao` is only allowed when `--mode=shaded`",
+            //     );
+            //     error.exit();
+            // }
+            if *no_denoise && matches!(mode, RenderMode3DArg::HeightMap) {
+                let mut cmd = Options::command();
+                let sub = cmd.find_subcommand_mut("render3d").unwrap();
+                let error = sub.error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "`--no-denoise` is not allowed when `--mode=height-map`",
+                );
+                error.exit();
+            }
+            let denoise = !no_denoise;
+            let mode = match mode {
+                // RenderMode3DArg::Shaded => {
+                //     RenderMode3D::Shaded { ssao, denoise }
+                // }
+                RenderMode3DArg::HeightMap => RenderMode3D::HeightMap,
+                // RenderMode3DArg::BlurredOcclusion => {
+                //     RenderMode3D::BlurredOcclusion { denoise }
+                // }
+                // RenderMode3DArg::RawOcclusion => {
+                //     RenderMode3D::RawOcclusion { denoise }
+                // }
+                RenderMode3DArg::NormalMap => {
+                    RenderMode3D::NormalMap { denoise }
+                }
+            };
             let buffer = match args.eval {
                 #[cfg(feature = "jit")]
                 EvalMode::Jit => {
@@ -759,7 +793,7 @@ pub fn run_action(
                     run_render_3d(
                         shape,
                         settings,
-                        mode,
+                        &mode,
                         *isometric,
                         *use_default_camera,
                         *model_angle,
@@ -775,7 +809,7 @@ pub fn run_action(
                     run_render_3d(
                         shape,
                         settings,
-                        mode,
+                        &mode,
                         *isometric,
                         *use_default_camera,
                         *model_angle,

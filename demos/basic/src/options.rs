@@ -42,15 +42,13 @@ pub enum HardcodedShape {
     SphereTree,
 }
 
-// #[derive(strum::EnumDiscriminants, Clone)]
-// #[strum_discriminants(name(RenderMode3DArg), derive(ValueEnum))]
-#[derive(ValueEnum, Clone, Debug, Default)]
+#[derive(strum::EnumDiscriminants, Clone)]
+#[strum_discriminants(name(RenderMode3DArg), derive(ValueEnum))]
 pub enum RenderMode3D {
     /// Pixels are colored based on height
-    #[default]
     HeightMap,
-    // /// Pixels are colored based on normals
-    // Normals { denoise: bool },
+    /// Pixels are colored based on normals
+    NormalMap { denoise: bool },
     // /// Pixels are shaded
     // Shaded { denoise: bool, ssao: bool },
     // /// Raw (unblurred) SSAO occlusion, for debugging
@@ -59,11 +57,11 @@ pub enum RenderMode3D {
     // BlurredOcclusion { denoise: bool },
 }
 
-// impl Default for RenderMode3DArg {
-//     fn default() -> Self {
-//         Self::HeightMap
-//     }
-// }
+impl Default for RenderMode3DArg {
+    fn default() -> Self {
+        Self::HeightMap
+    }
+}
 
 #[derive(ValueEnum, Default, Clone)]
 pub enum RenderMode2D {
@@ -108,7 +106,7 @@ pub enum ActionCommand {
 
         /// Render mode
         #[clap(long, value_enum, default_value_t)]
-        mode: RenderMode3D,
+        mode: RenderMode3DArg,
 
         /// Render using an isometric perspective
         #[clap(long)]
@@ -125,6 +123,18 @@ pub enum ActionCommand {
         /// Rotate camera
         #[clap(short = 's', long, default_value_t = 1.0)]
         model_scale: f32,
+
+        /// Apply SSAO to a shaded image
+        ///
+        /// Only compatible with `--mode=shaded`
+        #[clap(long)]
+        ssao: bool,
+
+        /// Skip denoising of normals
+        ///
+        /// Incompatible with `--mode=heightmap`
+        #[clap(long)]
+        no_denoise: bool,
     },
 
     Mesh {
