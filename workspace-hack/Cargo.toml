@@ -18,7 +18,6 @@ edition = "2021"
 ahash = { version = "0.8", default-features = false, features = ["compile-time-rng", "no-rng", "runtime-rng", "std"] }
 approx = { version = "0.5" }
 bytemuck = { version = "1", default-features = false, features = ["derive", "extern_crate_alloc"] }
-byteorder = { version = "1" }
 clap = { version = "4", features = ["derive"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "help", "std", "suggestions", "usage"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
@@ -27,11 +26,9 @@ once_cell = { version = "1", features = ["portable-atomic"] }
 regex = { version = "1", default-features = false, features = ["perf", "std"] }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
-zerocopy-c38e5c1d305a1b54 = { package = "zerocopy", version = "0.8", default-features = false, features = ["derive", "simd"] }
-zerocopy-ca01ad9e24f5d932 = { package = "zerocopy", version = "0.7", features = ["derive", "simd"] }
+zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [build-dependencies]
-byteorder = { version = "1" }
 once_cell = { version = "1", features = ["portable-atomic"] }
 proc-macro2 = { version = "1" }
 quote = { version = "1" }

@@ -4712,7 +4712,6 @@ dependencies = [
  "approx",
  "bitflags 2.9.0",
  "bytemuck",
- "byteorder",
  "clap",
  "clap_builder",
  "either",
@@ -4730,7 +4729,6 @@ dependencies = [
  "regex-automata",
  "serde",
  "syn",
- "zerocopy 0.7.35",
  "zerocopy 0.8.24",
 ]
 
@@ -4948,7 +4946,6 @@ version = "0.7.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b9b4fd18abc82b8136838da5d50bae7bdea537c574d8dc1a34ed098d6c166f0"
 dependencies = [
- "byteorder",
  "zerocopy-derive 0.7.35",
 ]
 
