@@ -127,7 +127,7 @@ pub enum ActionCommand {
         model_scale: f32,
     },
 
-    RenderMesh {
+    Mesh {
         #[clap(flatten)]
         settings: MeshSettings,
     },

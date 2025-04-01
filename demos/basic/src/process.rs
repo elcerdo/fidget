@@ -849,7 +849,7 @@ pub fn run_action(
                 )?;
             }
         }
-        ActionCommand::RenderMesh { settings } => {
+        ActionCommand::Mesh { settings } => {
             let mesh = match args.eval {
                 #[cfg(feature = "jit")]
                 EvalMode::Jit => {
