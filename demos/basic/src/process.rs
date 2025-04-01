@@ -63,7 +63,7 @@ fn run_sample<F: fidget::eval::Function + fidget::render::RenderHints>(
     num_samples: u32,
     num_steps: u32,
     output: &Option<PathBuf>,
-) -> () {
+) {
     let positions = make_positions(shape, num_samples, num_steps);
 
     if let Some(path) = output {
@@ -424,7 +424,7 @@ fn run_render_2d<F: fidget::eval::Function + fidget::render::RenderHints>(
         let cfg = fidget::render::ImageRenderConfig {
             image_size: fidget::render::ImageSize::from(settings.size),
             tile_sizes: F::tile_sizes_2d(),
-            threads: threads,
+            threads,
             ..Default::default()
         };
 
