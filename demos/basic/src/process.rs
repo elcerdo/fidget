@@ -10,6 +10,7 @@ use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -285,90 +286,90 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
                     }
                 })
                 .collect()
-        } /*
-          options::ColorMode::NearestSite => {
-              let sites = make_positions(shape.clone(), 128, 16);
-              let img_size = settings.size;
-              let world_to_model: nalgebra::Matrix4<f32> = mat.into();
-              let screen_to_world: nalgebra::Matrix4<f32> = cfg.mat();
-              let screen_to_model = world_to_model * screen_to_world;
-              let mut site_id_to_colors: HashMap<usize, [f32; 3]> =
-                  HashMap::new();
-              // let mut rng = StdRng::seed_from_u64(42);
-              let mut rng = rand::rng();
-              let foo = depth
-                  .into_iter()
-                  .zip(color)
-                  .enumerate()
-                  .flat_map(|(xy_, (d, c))| -> [u8; 4] {
-                      if d > 0 {
-                          let xy = xy_ as u32;
-                          let x_ = (xy % img_size) as f32;
-                          let y_ = (xy / img_size) as f32;
-                          let z_ = d as f32;
-                          let p_ = nalgebra::Vector4::new(x_, y_, z_, 1.0);
-                          let p = screen_to_model * p_;
+        }
+        options::RenderMode3D::NearestSite { ssao, denoise } => {
+            let sites = make_positions(shape.clone(), 128, 16);
 
-                          let mut min_data: Option<(f32, usize)> = None;
-                          for (site_id, site_pos) in sites.iter().enumerate() {
-                              let pos = p.xyz();
-                              let dist = (site_pos - pos).norm();
-                              match min_data {
-                                  None => {
-                                      min_data = Some((dist, site_id));
-                                  }
-                                  Some((dist_, _)) => {
-                                      if dist < dist_ {
-                                          min_data = Some((dist, site_id));
-                                      }
-                                  }
-                              }
-                          }
+            let img_size = settings.size;
+            let world_to_model: nalgebra::Matrix4<f32> = mat.into();
+            let screen_to_world: nalgebra::Matrix4<f32> = cfg.mat();
+            let screen_to_model = world_to_model * screen_to_world;
+            let mut site_id_to_colors: HashMap<usize, [f32; 3]> =
+                HashMap::new();
 
-                          let mut color: [f32; 3] = [
-                              rng.random_range(0.0..=1.0),
-                              rng.random_range(0.0..=1.0),
-                              rng.random_range(0.0..=1.0),
-                          ];
-                          if let Some((_, site_id)) = min_data {
-                              if !site_id_to_colors.contains_key(&site_id) {
-                                  site_id_to_colors.insert(site_id, color);
-                              }
-                              color = site_id_to_colors
-                                  .get(&site_id)
-                                  .unwrap()
-                                  .clone();
-                          }
+            // let mut rng = StdRng::seed_from_u64(42);
+            let mut rng = rand::rng();
 
-                          let gx_ = c[0] as f32 / 255.0 - 0.5;
-                          let gy_ = c[1] as f32 / 255.0 - 0.5;
-                          let gz_ = c[2] as f32 / 255.0 - 0.5;
-                          let g_ = nalgebra::Vector4::new(gx_, gy_, gz_, 0.0);
+            let image = if *denoise {
+                fidget::render::effects::denoise_normals(&image, threads)
+            } else {
+                image
+            };
+            let shaded_color =
+                fidget::render::effects::apply_shading(&image, *ssao, threads);
 
-                          let dir = nalgebra::Vector4::new(1.0, -1.0, 1.0, 0.0);
-                          let mut aa = dir.normalize().dot(&g_);
-                          aa = clamp(aa, 0.0, 1.0);
-                          aa = 64.0 + (255.0 - 64.0) * aa;
+            let foo = image
+                .into_iter()
+                .zip(shaded_color)
+                .enumerate()
+                .flat_map(|(xy_, (pixel, shaded_color))| -> [u8; 4] {
+                    if pixel.depth > 0 {
+                        let xy = xy_ as u32;
+                        let x_ = (xy % img_size) as f32;
+                        let y_ = (xy / img_size) as f32;
+                        let z_ = pixel.depth as f32;
+                        let p_ = nalgebra::Vector4::new(x_, y_, z_, 1.0);
+                        let p = screen_to_model * p_;
 
-                          [
-                              (aa * color[0]) as u8,
-                              (aa * color[1]) as u8,
-                              (aa * color[2]) as u8,
-                              255,
-                          ]
-                      } else {
-                          [0, 0, 0, 0]
-                      }
-                  })
-                  .collect();
-              warn!(
-                  "Contibuting sites {}/{}",
-                  site_id_to_colors.len(),
-                  sites.len()
-              );
-              foo
-          }
-          */
+                        let mut min_data: Option<(f32, usize)> = None;
+                        for (site_id, site_pos) in sites.iter().enumerate() {
+                            let pos = p.xyz();
+                            let dist = (site_pos - pos).norm();
+                            match min_data {
+                                None => {
+                                    min_data = Some((dist, site_id));
+                                }
+                                Some((dist_, _)) => {
+                                    if dist < dist_ {
+                                        min_data = Some((dist, site_id));
+                                    }
+                                }
+                            }
+                        }
+
+                        let mut site_color: [f32; 3] = [
+                            rng.random_range(0.0..=1.0),
+                            rng.random_range(0.0..=1.0),
+                            rng.random_range(0.0..=1.0),
+                        ];
+                        if let Some((_, site_id)) = min_data {
+                            if !site_id_to_colors.contains_key(&site_id) {
+                                site_id_to_colors.insert(site_id, site_color);
+                            }
+                            site_color = site_id_to_colors
+                                .get(&site_id)
+                                .unwrap()
+                                .clone();
+                        }
+
+                        [
+                            (shaded_color[0] as f32 * site_color[0]) as u8,
+                            (shaded_color[1] as f32 * site_color[1]) as u8,
+                            (shaded_color[2] as f32 * site_color[2]) as u8,
+                            255,
+                        ]
+                    } else {
+                        [0, 0, 0, 0]
+                    }
+                })
+                .collect();
+            info!(
+                "Contibuting sites {}/{}",
+                site_id_to_colors.len(),
+                sites.len()
+            );
+            foo
+        }
     };
 
     out
@@ -615,6 +616,10 @@ pub fn run_action(
                     RenderMode3D::NormalMap { denoise }
                 }
                 RenderMode3DArg::ModelPosition => RenderMode3D::ModelPosition,
+                RenderMode3DArg::NearestSite => RenderMode3D::NearestSite {
+                    ssao: *ssao,
+                    denoise,
+                },
             };
             let buffer = match args.eval {
                 #[cfg(feature = "jit")]

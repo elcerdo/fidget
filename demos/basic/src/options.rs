@@ -57,6 +57,8 @@ pub enum RenderMode3D {
     BlurredOcclusion { denoise: bool },
     /// Model space position
     ModelPosition,
+    /// Color by nearest seed
+    NearestSite { denoise: bool, ssao: bool },
 }
 
 impl Default for RenderMode3DArg {
