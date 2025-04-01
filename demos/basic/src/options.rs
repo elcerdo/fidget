@@ -42,12 +42,44 @@ pub enum HardcodedShape {
     SphereTree,
 }
 
-#[derive(ValueEnum, Clone)]
-pub enum ColorMode {
-    Depth,
-    CameraNormalMap,
+#[derive(strum::EnumDiscriminants, Clone)]
+#[strum_discriminants(name(RenderMode3DArg), derive(ValueEnum))]
+pub enum RenderMode3D {
+    /// Pixels are colored based on height
+    HeightMap,
+    /// Pixels are colored based on normals
+    NormalMap { denoise: bool },
+    /// Pixels are shaded
+    Shaded { denoise: bool, ssao: bool },
+    /// Raw (unblurred) SSAO occlusion, for debugging
+    RawOcclusion { denoise: bool },
+    /// Blurred SSAO occlusion, for debugging
+    BlurredOcclusion { denoise: bool },
+    /// Model space position
     ModelPosition,
-    NearestSite,
+    /// Color by nearest seed
+    NearestSite { denoise: bool, ssao: bool },
+}
+
+impl Default for RenderMode3DArg {
+    fn default() -> Self {
+        Self::HeightMap
+    }
+}
+
+#[derive(ValueEnum, Default, Clone)]
+pub enum RenderMode2D {
+    /// Pixels are colored based on interval results
+    #[default]
+    Debug,
+    /// Monochrome rendering (white-on-black)
+    Mono,
+    /// Approximate signed distance field visualization
+    SdfApprox,
+    /// Exact signed distance field visualization (more expensive)
+    SdfExact,
+    /// Brute-force (pixel-by-pixel) evaluation
+    Brute,
 }
 
 #[derive(Subcommand)]
@@ -67,44 +99,74 @@ pub enum ActionCommand {
         #[clap(flatten)]
         settings: ImageSettings,
 
-        /// Use brute-force (pixel-by-pixel) evaluation
-        #[clap(short, long)]
-        brute: bool,
-
-        /// Render as a color-gradient SDF
-        #[clap(long)]
-        sdf: bool,
+        /// Render mode
+        #[clap(long, value_enum, default_value_t)]
+        mode: RenderMode2D,
     },
 
     Render3d {
         #[clap(flatten)]
         settings: ImageSettings,
 
-        /// Render in color
-        #[clap(long, value_enum, default_value_t = ColorMode::Depth)]
-        color_mode: ColorMode,
+        /// Render mode
+        #[clap(long, value_enum, default_value_t)]
+        mode: RenderMode3DArg,
 
-        /// Render using an isometric perspective
-        #[clap(long)]
-        isometric: bool,
+        /// Camera settings
+        #[clap(flatten)]
+        camera: CameraSettings,
 
-        /// Rotate camera
-        #[clap(long, default_value_t = true)]
-        use_default_camera: bool,
-
-        /// Rotate model
-        #[clap(short = 'a', long, default_value_t = 0.0)]
-        model_angle: f32,
-
-        /// Rotate camera
-        #[clap(short = 's', long, default_value_t = 1.0)]
-        model_scale: f32,
+        /// Model transform
+        #[clap(flatten)]
+        model_transform: TransformSettings,
     },
 
     Mesh {
         #[clap(flatten)]
         settings: MeshSettings,
+
+        /// Model transform
+        #[clap(flatten)]
+        model_transform: TransformSettings,
     },
+}
+
+#[derive(Parser)]
+pub struct CameraSettings {
+    /// Render using an isometric perspective
+    #[clap(long)]
+    pub is_isometric: bool,
+
+    /// Use default camera position
+    #[clap(long, default_value_t)]
+    pub no_default_position: bool,
+
+    /// Apply SSAO to a shaded image
+    ///
+    /// Only compatible with `--mode=shaded`
+    #[clap(long)]
+    pub ssao: bool,
+
+    /// Skip denoising of normals
+    ///
+    /// Incompatible with `--mode=heightmap`
+    #[clap(long)]
+    pub no_denoise: bool,
+}
+
+#[derive(Parser)]
+pub struct TransformSettings {
+    /// Elevation
+    #[clap(short = 'e', long, default_value_t = 0.0)]
+    pub elevation: f32,
+
+    /// Y-axis rotation
+    #[clap(short = 'a', long, default_value_t = 0.0)]
+    pub angle: f32,
+
+    /// Uniform scale
+    #[clap(short = 's', long, default_value_t = 1.0)]
+    pub scale: f32,
 }
 
 #[derive(Parser)]

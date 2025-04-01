@@ -52,7 +52,7 @@ pub fn prepare_tape(
         Some(path) => {
             info!("Loading model from {:?}", path);
             let top = Instant::now();
-            let mut handle = std::fs::File::open(&path).unwrap();
+            let mut handle = std::fs::File::open(path).unwrap();
             let ret = Context::from_text(&mut handle).unwrap();
             info!("Loaded model in {:?}", top.elapsed());
             ret

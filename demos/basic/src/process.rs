@@ -1,16 +1,18 @@
 use crate::options;
 
 use anyhow::Result;
+
 use log::info;
-use log::warn;
-use nalgebra::clamp;
+
+use clap::CommandFactory;
+
 use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
-use std::num::NonZero;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -61,7 +63,7 @@ fn run_sample<F: fidget::eval::Function + fidget::render::RenderHints>(
     num_samples: u32,
     num_steps: u32,
     output: &Option<PathBuf>,
-) -> () {
+) {
     let positions = make_positions(shape, num_samples, num_steps);
 
     if let Some(path) = output {
@@ -91,20 +93,19 @@ end_header
 fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
     shape: fidget::shape::Shape<F>,
     settings: &options::ImageSettings,
-    color_mode: &options::ColorMode,
-    isometric: bool,
-    use_default_camera: bool,
-    model_angle: f32,
-    model_scale: f32,
+    mode: &options::RenderMode3D,
+    camera: &options::CameraSettings,
+    model_transform: &options::TransformSettings,
     num_repeats: usize,
     num_threads: usize,
 ) -> Vec<u8> {
     let mut mat = nalgebra::Transform3::identity();
     for ii in 0..3 {
-        *mat.matrix_mut().get_mut((ii, ii)).unwrap() = 1.0 / model_scale;
+        *mat.matrix_mut().get_mut((ii, ii)).unwrap() =
+            1.0 / model_transform.scale;
     }
 
-    if use_default_camera {
+    if !camera.no_default_position {
         let mat_aa = nalgebra::Rotation3::from_axis_angle(
             &nalgebra::Vector3::y_axis(),
             std::f32::consts::PI / -4.0,
@@ -117,32 +118,33 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
     }
 
     {
+        // apply model elevation
+        let mat_elev =
+            nalgebra::Translation3::new(0.0, model_transform.elevation, 0.0);
         // apply model rotation
         let mat_rot = nalgebra::Rotation3::from_axis_angle(
             &nalgebra::Vector3::y_axis(),
-            std::f32::consts::PI / 180.0 * model_angle,
+            std::f32::consts::PI / 180.0 * model_transform.angle,
         );
-        mat = mat_rot * mat;
+        mat = mat_elev * mat_rot * mat;
     }
 
-    if !isometric {
+    if !camera.is_isometric {
         *mat.matrix_mut().get_mut((3, 2)).unwrap() = 0.3;
     }
 
-    let pool: Option<rayon::ThreadPool>;
     let threads = match num_threads {
         0 => Some(fidget::render::ThreadPool::Global),
         1 => None,
-        nn => {
-            pool = Some(
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(nn)
-                    .build()
-                    .unwrap(),
-            );
-            pool.as_ref().map(fidget::render::ThreadPool::Custom)
-        }
+        nn => Some(fidget::render::ThreadPool::Custom(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(nn)
+                .build()
+                .unwrap(),
+        )),
     };
+    let threads = threads.as_ref();
+
     let view = fidget::render::View3::from_center_and_scale(
         nalgebra::Vector3::new(0.0, 0.0, 0.0),
         1.0,
@@ -157,36 +159,168 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
 
     let shape_ = shape.clone().apply_transform(mat.into());
 
-    let mut depth = vec![];
-    let mut color = vec![];
+    let mut image = Default::default();
     for _ in 0..num_repeats {
-        (depth, color) = cfg.run(shape_.clone()).unwrap();
+        image = cfg.run(shape_.clone()).unwrap();
     }
 
-    let out = match color_mode {
-        options::ColorMode::NearestSite => {
+    let out = match mode {
+        options::RenderMode3D::HeightMap => {
+            let z_min = image.iter().map(|p| p.depth).min().unwrap_or(0);
+            let z_max = image.iter().map(|p| p.depth).max().unwrap_or(1);
+            info!("Depth min {} max {}", z_min, z_max);
+            image
+                .into_iter()
+                .flat_map(|p| {
+                    if p.depth > 0 {
+                        let z = (p.depth * 255 / z_max) as u8;
+                        [z, z, z, 255]
+                    } else {
+                        [0, 0, 0, 0]
+                    }
+                })
+                .collect()
+        }
+        options::RenderMode3D::NormalMap { denoise } => {
+            let image = if *denoise {
+                fidget::render::effects::denoise_normals(&image, threads)
+            } else {
+                image
+            };
+            image
+                .into_iter()
+                .flat_map(|p| {
+                    if p.depth > 0 {
+                        let c = p.to_color();
+                        [c[0], c[1], c[2], 255]
+                    } else {
+                        [0, 0, 0, 0]
+                    }
+                })
+                .collect()
+        }
+        options::RenderMode3D::Shaded { ssao, denoise } => {
+            let image = if *denoise {
+                fidget::render::effects::denoise_normals(&image, threads)
+            } else {
+                image
+            };
+            let color =
+                fidget::render::effects::apply_shading(&image, *ssao, threads);
+            image
+                .into_iter()
+                .zip(color)
+                .flat_map(|(p, c)| {
+                    if p.depth > 0 {
+                        [c[0], c[1], c[2], 255]
+                    } else {
+                        [0, 0, 0, 0]
+                    }
+                })
+                .collect()
+        }
+        options::RenderMode3D::RawOcclusion { denoise } => {
+            let image = if *denoise {
+                fidget::render::effects::denoise_normals(&image, threads)
+            } else {
+                image
+            };
+            let ssao = fidget::render::effects::compute_ssao(&image, threads);
+            ssao.into_iter()
+                .flat_map(|p| {
+                    if p.is_nan() {
+                        [255; 4]
+                    } else {
+                        let v = (p * 255.0).min(255.0) as u8;
+                        [v, v, v, 255]
+                    }
+                })
+                .collect()
+        }
+        options::RenderMode3D::BlurredOcclusion { denoise } => {
+            let image = if *denoise {
+                fidget::render::effects::denoise_normals(&image, threads)
+            } else {
+                image
+            };
+            let ssao = fidget::render::effects::compute_ssao(&image, threads);
+            let blurred = fidget::render::effects::blur_ssao(&ssao, threads);
+            blurred
+                .into_iter()
+                .flat_map(|p| {
+                    if p.is_nan() {
+                        [255; 4]
+                    } else {
+                        let v = (p * 255.0).min(255.0) as u8;
+                        [v, v, v, 255]
+                    }
+                })
+                .collect()
+        }
+        options::RenderMode3D::ModelPosition => {
+            let img_size = settings.size;
+            let world_to_model: nalgebra::Matrix4<f32> = mat.into();
+            let screen_to_world: nalgebra::Matrix4<f32> = cfg.mat();
+            let screen_to_model = world_to_model * screen_to_world;
+            image
+                .into_iter()
+                .enumerate()
+                .flat_map(|(xy_, p)| {
+                    if p.depth > 0 {
+                        let xy = xy_ as u32;
+                        let x_ = (xy % img_size) as f32;
+                        let y_ = (xy / img_size) as f32;
+                        let z_ = p.depth as f32;
+                        let p_ = nalgebra::Vector4::new(x_, y_, z_, 1.0);
+                        let p = screen_to_model * p_;
+                        let red =
+                            if p[0] > 0.0 { (p[0] * 255.0) as u8 } else { 0 };
+                        let green =
+                            if p[1] > 0.0 { (p[1] * 255.0) as u8 } else { 0 };
+                        let blue =
+                            if p[2] > 0.0 { (p[2] * 255.0) as u8 } else { 0 };
+                        [red, green, blue, 255]
+                    } else {
+                        [0, 0, 0, 0]
+                    }
+                })
+                .collect()
+        }
+        options::RenderMode3D::NearestSite { ssao, denoise } => {
             let sites = make_positions(shape.clone(), 128, 16);
+
             let img_size = settings.size;
             let world_to_model: nalgebra::Matrix4<f32> = mat.into();
             let screen_to_world: nalgebra::Matrix4<f32> = cfg.mat();
             let screen_to_model = world_to_model * screen_to_world;
             let mut site_id_to_colors: HashMap<usize, [f32; 3]> =
                 HashMap::new();
+
             // let mut rng = StdRng::seed_from_u64(42);
             let mut rng = rand::rng();
-            let foo = depth
+
+            let image = if *denoise {
+                fidget::render::effects::denoise_normals(&image, threads)
+            } else {
+                image
+            };
+            let shaded_color =
+                fidget::render::effects::apply_shading(&image, *ssao, threads);
+
+            let image = image
                 .into_iter()
-                .zip(color)
+                .zip(shaded_color)
                 .enumerate()
-                .flat_map(|(xy_, (d, c))| -> [u8; 4] {
-                    if d > 0 {
+                .flat_map(|(xy_, (pixel, shaded_color))| -> [u8; 4] {
+                    if pixel.depth > 0 {
                         let xy = xy_ as u32;
                         let x_ = (xy % img_size) as f32;
                         let y_ = (xy / img_size) as f32;
-                        let z_ = d as f32;
+                        let z_ = pixel.depth as f32;
                         let p_ = nalgebra::Vector4::new(x_, y_, z_, 1.0);
                         let p = screen_to_model * p_;
 
+                        // FIXME use kdtree
                         let mut min_data: Option<(f32, usize)> = None;
                         for (site_id, site_pos) in sites.iter().enumerate() {
                             let pos = p.xyz();
@@ -203,35 +337,21 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
                             }
                         }
 
-                        let mut color: [f32; 3] = [
+                        let mut site_color: [f32; 3] = [
                             rng.random_range(0.0..=1.0),
                             rng.random_range(0.0..=1.0),
                             rng.random_range(0.0..=1.0),
                         ];
                         if let Some((_, site_id)) = min_data {
-                            if !site_id_to_colors.contains_key(&site_id) {
-                                site_id_to_colors.insert(site_id, color);
-                            }
-                            color = site_id_to_colors
-                                .get(&site_id)
-                                .unwrap()
-                                .clone();
+                            site_color = *site_id_to_colors
+                                .entry(site_id)
+                                .or_insert(site_color);
                         }
 
-                        let gx_ = c[0] as f32 / 255.0 - 0.5;
-                        let gy_ = c[1] as f32 / 255.0 - 0.5;
-                        let gz_ = c[2] as f32 / 255.0 - 0.5;
-                        let g_ = nalgebra::Vector4::new(gx_, gy_, gz_, 0.0);
-
-                        let dir = nalgebra::Vector4::new(1.0, -1.0, 1.0, 0.0);
-                        let mut aa = dir.normalize().dot(&g_);
-                        aa = clamp(aa, 0.0, 1.0);
-                        aa = 64.0 + (255.0 - 64.0) * aa;
-
                         [
-                            (aa * color[0]) as u8,
-                            (aa * color[1]) as u8,
-                            (aa * color[2]) as u8,
+                            (shaded_color[0] as f32 * site_color[0]) as u8,
+                            (shaded_color[1] as f32 * site_color[1]) as u8,
+                            (shaded_color[2] as f32 * site_color[2]) as u8,
                             255,
                         ]
                     } else {
@@ -239,69 +359,12 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
                     }
                 })
                 .collect();
-            warn!(
+            info!(
                 "Contibuting sites {}/{}",
                 site_id_to_colors.len(),
                 sites.len()
             );
-            foo
-        }
-        options::ColorMode::CameraNormalMap => depth
-            .into_iter()
-            .zip(color)
-            .flat_map(|(d, c)| {
-                if d > 0 {
-                    [c[0], c[1], c[2], 255]
-                } else {
-                    [0, 0, 0, 0]
-                }
-            })
-            .collect(),
-        options::ColorMode::Depth => {
-            let z_min = depth.iter().min().cloned().unwrap_or(0);
-            let z_max = depth.iter().max().cloned().unwrap_or(1);
-            info!("Depth min {} max {}", z_min, z_max);
-            depth
-                .into_iter()
-                .flat_map(|d| {
-                    if d > 0 {
-                        let z = (d * 255 / z_max) as u8;
-                        [z, z, z, 255]
-                    } else {
-                        [0, 0, 0, 0]
-                    }
-                })
-                .collect()
-        }
-        options::ColorMode::ModelPosition => {
-            let img_size = settings.size;
-            let world_to_model: nalgebra::Matrix4<f32> = mat.into();
-            let screen_to_world: nalgebra::Matrix4<f32> = cfg.mat();
-            let screen_to_model = world_to_model * screen_to_world;
-            info!("Model position");
-            depth
-                .into_iter()
-                .enumerate()
-                .flat_map(|(xy_, d)| {
-                    if d > 0 {
-                        let xy = xy_ as u32;
-                        let x_ = (xy % img_size) as f32;
-                        let y_ = (xy / img_size) as f32;
-                        let z_ = d as f32;
-                        let p_ = nalgebra::Vector4::new(x_, y_, z_, 1.0);
-                        let p = screen_to_model * p_;
-                        let red =
-                            if p[0] > 0.0 { (p[0] * 255.0) as u8 } else { 0 };
-                        let green =
-                            if p[1] > 0.0 { (p[1] * 255.0) as u8 } else { 0 };
-                        let blue =
-                            if p[2] > 0.0 { (p[2] * 255.0) as u8 } else { 0 };
-                        [red, green, blue, 255]
-                    } else {
-                        [0, 0, 0, 0]
-                    }
-                })
-                .collect()
+            image
         }
     };
 
@@ -311,12 +374,12 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
 fn run_render_2d<F: fidget::eval::Function + fidget::render::RenderHints>(
     shape: fidget::shape::Shape<F>,
     settings: &options::ImageSettings,
-    brute: bool,
-    sdf: bool,
+    mode: &options::RenderMode2D,
     num_repeats: usize,
     num_threads: usize,
 ) -> Vec<u8> {
-    if brute {
+    use options::RenderMode2D;
+    if matches!(mode, RenderMode2D::Brute) {
         let tape = shape.float_slice_tape(Default::default());
         let mut eval = fidget::shape::Shape::<F>::new_float_slice_eval();
         let mut out: Vec<bool> = vec![];
@@ -342,48 +405,79 @@ fn run_render_2d<F: fidget::eval::Function + fidget::render::RenderHints>(
             .flat_map(|i| i.into_iter())
             .collect()
     } else {
-        let pool: Option<rayon::ThreadPool>;
         let threads = match num_threads {
             0 => Some(fidget::render::ThreadPool::Global),
             1 => None,
-            nn => {
-                pool = Some(
-                    rayon::ThreadPoolBuilder::new()
-                        .num_threads(nn)
-                        .build()
-                        .unwrap(),
-                );
-                pool.as_ref().map(fidget::render::ThreadPool::Custom)
-            }
+            nn => Some(fidget::render::ThreadPool::Custom(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(nn)
+                    .build()
+                    .unwrap(),
+            )),
         };
+        let threads = threads.as_ref();
+
         let cfg = fidget::render::ImageRenderConfig {
             image_size: fidget::render::ImageSize::from(settings.size),
             tile_sizes: F::tile_sizes_2d(),
             threads,
             ..Default::default()
         };
-        if sdf {
-            let mut image = vec![];
-            for _ in 0..num_repeats {
-                image = cfg
-                    .run::<_, fidget::render::SdfRenderMode>(shape.clone())
-                    .unwrap();
+
+        match mode {
+            RenderMode2D::Mono => {
+                let mut image = fidget::render::Image::default();
+                for _ in 0..num_repeats {
+                    image = cfg
+                        .run::<_, fidget::render::BitRenderMode>(shape.clone())
+                        .unwrap();
+                }
+                image
+                    .into_iter()
+                    .flat_map(|a| if a { [255; 4] } else { [0, 0, 0, 255] })
+                    .collect()
             }
-            image
-                .into_iter()
-                .flat_map(|a| [a[0], a[1], a[2], 255].into_iter())
-                .collect()
-        } else {
-            let mut image = vec![];
-            for _ in 0..num_repeats {
-                image = cfg
-                    .run::<_, fidget::render::DebugRenderMode>(shape.clone())
-                    .unwrap();
+            RenderMode2D::SdfExact => {
+                let mut image = fidget::render::Image::default();
+                for _ in 0..num_repeats {
+                    image = cfg
+                        .run::<_, fidget::render::SdfPixelRenderMode>(
+                            shape.clone(),
+                        )
+                        .unwrap();
+                }
+                image
+                    .into_iter()
+                    .flat_map(|a| [a[0], a[1], a[2], 255].into_iter())
+                    .collect()
             }
-            image
-                .into_iter()
-                .flat_map(|p| p.as_debug_color().into_iter())
-                .collect()
+            RenderMode2D::SdfApprox => {
+                let mut image = fidget::render::Image::default();
+                for _ in 0..num_repeats {
+                    image = cfg
+                        .run::<_, fidget::render::SdfRenderMode>(shape.clone())
+                        .unwrap();
+                }
+                image
+                    .into_iter()
+                    .flat_map(|a| [a[0], a[1], a[2], 255].into_iter())
+                    .collect()
+            }
+            RenderMode2D::Debug => {
+                let mut image = fidget::render::Image::default();
+                for _ in 0..num_repeats {
+                    image = cfg
+                        .run::<_, fidget::render::DebugRenderMode>(
+                            shape.clone(),
+                        )
+                        .unwrap();
+                }
+                image
+                    .into_iter()
+                    .flat_map(|p| p.as_debug_color().into_iter())
+                    .collect()
+            }
+            RenderMode2D::Brute => unreachable!(),
         }
     }
 }
@@ -391,28 +485,56 @@ fn run_render_2d<F: fidget::eval::Function + fidget::render::RenderHints>(
 fn run_mesh<F: fidget::eval::Function + fidget::render::RenderHints>(
     shape: fidget::shape::Shape<F>,
     settings: &options::MeshSettings,
+    model_transform: &options::TransformSettings,
     num_repeats: usize,
     num_threads: usize,
 ) -> fidget::mesh::Mesh {
-    use fidget::mesh::ThreadCount;
-
     let mut mesh = fidget::mesh::Mesh::new();
 
+    // Transform the shape based on our render settings
+    let s = 1.0 / model_transform.scale;
+    let scale = nalgebra::Scale3::new(s, s, s);
+    let center =
+        nalgebra::Translation3::new(0.0, model_transform.elevation, 0.0);
+    let rotation = nalgebra::Rotation3::from_axis_angle(
+        &nalgebra::Vector3::y_axis(),
+        std::f32::consts::PI / 180.0 * model_transform.angle,
+    );
+    let t = rotation.to_homogeneous()
+        * center.to_homogeneous()
+        * scale.to_homogeneous();
+    let shape = shape.apply_transform(t);
+
     let threads = match num_threads {
-        0 => ThreadCount::Many(NonZero::new(8).unwrap()),
-        1 => ThreadCount::One,
-        nn => ThreadCount::Many(NonZero::new(nn).unwrap()),
+        0 => Some(fidget::render::ThreadPool::Global),
+        1 => None,
+        nn => Some(fidget::render::ThreadPool::Custom(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(nn)
+                .build()
+                .unwrap(),
+        )),
     };
+    let threads = threads.as_ref();
+
+    let mut octree_time = std::time::Duration::ZERO;
+    let mut mesh_time = std::time::Duration::ZERO;
     for _ in 0..num_repeats {
         let settings = fidget::mesh::Settings {
-            threads,
             depth: settings.depth,
+            threads,
             ..Default::default()
         };
+        let start = std::time::Instant::now();
         let octree = fidget::mesh::Octree::build(&shape, settings);
+        octree_time += start.elapsed();
+
+        let start = std::time::Instant::now();
         mesh = octree.walk_dual(settings);
+        mesh_time += start.elapsed();
     }
 
+    // (mesh, octree_time, mesh_time)
     mesh
 }
 
@@ -445,12 +567,53 @@ pub fn run_action(
         }
         ActionCommand::Render3d {
             settings,
-            color_mode,
-            isometric,
-            use_default_camera,
-            model_angle,
-            model_scale,
+            mode,
+            camera,
+            model_transform,
         } => {
+            use options::Options;
+            use options::RenderMode3D;
+            use options::RenderMode3DArg;
+            if camera.ssao && !matches!(mode, RenderMode3DArg::Shaded) {
+                let mut cmd = Options::command();
+                let sub = cmd.find_subcommand_mut("render3d").unwrap();
+                let error = sub.error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "`--ssao` is only allowed when `--mode=shaded`",
+                );
+                error.exit();
+            }
+            if camera.no_denoise && matches!(mode, RenderMode3DArg::HeightMap) {
+                let mut cmd = Options::command();
+                let sub = cmd.find_subcommand_mut("render3d").unwrap();
+                let error = sub.error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "`--no-denoise` is not allowed when `--mode=height-map`",
+                );
+                error.exit();
+            }
+            let denoise = !camera.no_denoise;
+            let mode = match mode {
+                RenderMode3DArg::Shaded => RenderMode3D::Shaded {
+                    ssao: camera.ssao,
+                    denoise,
+                },
+                RenderMode3DArg::HeightMap => RenderMode3D::HeightMap,
+                RenderMode3DArg::BlurredOcclusion => {
+                    RenderMode3D::BlurredOcclusion { denoise }
+                }
+                RenderMode3DArg::RawOcclusion => {
+                    RenderMode3D::RawOcclusion { denoise }
+                }
+                RenderMode3DArg::NormalMap => {
+                    RenderMode3D::NormalMap { denoise }
+                }
+                RenderMode3DArg::ModelPosition => RenderMode3D::ModelPosition,
+                RenderMode3DArg::NearestSite => RenderMode3D::NearestSite {
+                    ssao: camera.ssao,
+                    denoise,
+                },
+            };
             let buffer = match args.eval {
                 #[cfg(feature = "jit")]
                 EvalMode::Jit => {
@@ -460,11 +623,9 @@ pub fn run_action(
                     run_render_3d(
                         shape,
                         settings,
-                        color_mode,
-                        *isometric,
-                        *use_default_camera,
-                        *model_angle,
-                        *model_scale,
+                        &mode,
+                        camera,
+                        model_transform,
                         args.num_repeats,
                         args.num_threads,
                     )
@@ -476,11 +637,9 @@ pub fn run_action(
                     run_render_3d(
                         shape,
                         settings,
-                        color_mode,
-                        *isometric,
-                        *use_default_camera,
-                        *model_angle,
-                        *model_scale,
+                        &mode,
+                        camera,
+                        model_transform,
                         args.num_repeats,
                         args.num_threads,
                     )
@@ -504,59 +663,56 @@ pub fn run_action(
                 )?;
             }
         }
-        ActionCommand::Render2d {
+        ActionCommand::Render2d { settings, mode } => {
+            let buffer = match args.eval {
+                #[cfg(feature = "jit")]
+                EvalMode::Jit => {
+                    let shape = fidget::jit::JitShape::new(&ctx, root)?;
+                    info!("Built shape in {:?} (JIT)", top.elapsed());
+                    top = Instant::now();
+                    run_render_2d(
+                        shape,
+                        settings,
+                        mode,
+                        args.num_repeats,
+                        args.num_threads,
+                    )
+                }
+                EvalMode::Vm => {
+                    let shape = fidget::vm::VmShape::new(&ctx, root)?;
+                    info!("Built shape in {:?} (VM)", top.elapsed());
+                    top = Instant::now();
+                    run_render_2d(
+                        shape,
+                        settings,
+                        mode,
+                        args.num_repeats,
+                        args.num_threads,
+                    )
+                }
+            };
+            info!(
+                "Rendered {}x at {:?} ms/frame",
+                args.num_repeats,
+                top.elapsed().as_micros() as f64
+                    / 1000.0
+                    / (args.num_repeats as f64)
+            );
+            if let Some(path) = &settings.output {
+                info!("Writing PNG to {:?}", path);
+                image::save_buffer(
+                    path,
+                    &buffer,
+                    settings.size,
+                    settings.size,
+                    image::ColorType::Rgba8,
+                )?;
+            }
+        }
+        ActionCommand::Mesh {
             settings,
-            brute,
-            sdf,
+            model_transform,
         } => {
-            let buffer = match args.eval {
-                #[cfg(feature = "jit")]
-                EvalMode::Jit => {
-                    let shape = fidget::jit::JitShape::new(&ctx, root)?;
-                    info!("Built shape in {:?} (JIT)", top.elapsed());
-                    top = Instant::now();
-                    run_render_2d(
-                        shape,
-                        settings,
-                        *brute,
-                        *sdf,
-                        args.num_repeats,
-                        args.num_threads,
-                    )
-                }
-                EvalMode::Vm => {
-                    let shape = fidget::vm::VmShape::new(&ctx, root)?;
-                    info!("Built shape in {:?} (VM)", top.elapsed());
-                    top = Instant::now();
-                    run_render_2d(
-                        shape,
-                        settings,
-                        *brute,
-                        *sdf,
-                        args.num_repeats,
-                        args.num_threads,
-                    )
-                }
-            };
-            info!(
-                "Rendered {}x at {:?} ms/frame",
-                args.num_repeats,
-                top.elapsed().as_micros() as f64
-                    / 1000.0
-                    / (args.num_repeats as f64)
-            );
-            if let Some(path) = &settings.output {
-                info!("Writing PNG to {:?}", path);
-                image::save_buffer(
-                    path,
-                    &buffer,
-                    settings.size,
-                    settings.size,
-                    image::ColorType::Rgba8,
-                )?;
-            }
-        }
-        ActionCommand::Mesh { settings } => {
             let mesh = match args.eval {
                 #[cfg(feature = "jit")]
                 EvalMode::Jit => {
@@ -566,6 +722,7 @@ pub fn run_action(
                     run_mesh(
                         shape,
                         settings,
+                        model_transform,
                         args.num_repeats,
                         args.num_threads,
                     )
@@ -577,6 +734,7 @@ pub fn run_action(
                     run_mesh(
                         shape,
                         settings,
+                        model_transform,
                         args.num_repeats,
                         args.num_threads,
                     )
