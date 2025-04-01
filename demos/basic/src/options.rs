@@ -49,12 +49,14 @@ pub enum RenderMode3D {
     HeightMap,
     /// Pixels are colored based on normals
     NormalMap { denoise: bool },
-    // /// Pixels are shaded
-    // Shaded { denoise: bool, ssao: bool },
-    // /// Raw (unblurred) SSAO occlusion, for debugging
-    // RawOcclusion { denoise: bool },
-    // /// Blurred SSAO occlusion, for debugging
-    // BlurredOcclusion { denoise: bool },
+    /// Pixels are shaded
+    Shaded { denoise: bool, ssao: bool },
+    /// Raw (unblurred) SSAO occlusion, for debugging
+    RawOcclusion { denoise: bool },
+    /// Blurred SSAO occlusion, for debugging
+    BlurredOcclusion { denoise: bool },
+    /// Model space position
+    ModelPosition,
 }
 
 impl Default for RenderMode3DArg {
@@ -112,17 +114,13 @@ pub enum ActionCommand {
         #[clap(long)]
         isometric: bool,
 
-        /// Rotate camera
+        /// Use default camera position
         #[clap(long, default_value_t = true)]
         use_default_camera: bool,
 
-        /// Rotate model
-        #[clap(short = 'a', long, default_value_t = 0.0)]
-        model_angle: f32,
-
-        /// Rotate camera
-        #[clap(short = 's', long, default_value_t = 1.0)]
-        model_scale: f32,
+        /// Model transform
+        #[clap(flatten)]
+        model_transform: TransformSettings,
 
         /// Apply SSAO to a shaded image
         ///
@@ -140,7 +138,26 @@ pub enum ActionCommand {
     Mesh {
         #[clap(flatten)]
         settings: MeshSettings,
+
+        /// Model transform
+        #[clap(flatten)]
+        model_transform: TransformSettings,
     },
+}
+
+#[derive(Parser)]
+pub struct TransformSettings {
+    /// Elevation
+    #[clap(short = 'e', long, default_value_t = 0.0)]
+    pub elevation: f32,
+
+    /// Y-axis rotation
+    #[clap(short = 'a', long, default_value_t = 0.0)]
+    pub angle: f32,
+
+    /// Uniform scale
+    #[clap(short = 's', long, default_value_t = 1.0)]
+    pub scale: f32,
 }
 
 #[derive(Parser)]
