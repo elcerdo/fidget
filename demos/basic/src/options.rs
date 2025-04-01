@@ -112,29 +112,13 @@ pub enum ActionCommand {
         #[clap(long, value_enum, default_value_t)]
         mode: RenderMode3DArg,
 
-        /// Render using an isometric perspective
-        #[clap(long)]
-        isometric: bool,
-
-        /// Use default camera position
-        #[clap(long, default_value_t = true)]
-        use_default_camera: bool,
+        /// Camera settings
+        #[clap(flatten)]
+        camera: CameraSettings,
 
         /// Model transform
         #[clap(flatten)]
         model_transform: TransformSettings,
-
-        /// Apply SSAO to a shaded image
-        ///
-        /// Only compatible with `--mode=shaded`
-        #[clap(long)]
-        ssao: bool,
-
-        /// Skip denoising of normals
-        ///
-        /// Incompatible with `--mode=heightmap`
-        #[clap(long)]
-        no_denoise: bool,
     },
 
     Mesh {
@@ -145,6 +129,29 @@ pub enum ActionCommand {
         #[clap(flatten)]
         model_transform: TransformSettings,
     },
+}
+
+#[derive(Parser)]
+pub struct CameraSettings {
+    /// Render using an isometric perspective
+    #[clap(long)]
+    pub is_isometric: bool,
+
+    /// Use default camera position
+    #[clap(long, default_value_t)]
+    pub no_default_position: bool,
+
+    /// Apply SSAO to a shaded image
+    ///
+    /// Only compatible with `--mode=shaded`
+    #[clap(long)]
+    pub ssao: bool,
+
+    /// Skip denoising of normals
+    ///
+    /// Incompatible with `--mode=heightmap`
+    #[clap(long)]
+    pub no_denoise: bool,
 }
 
 #[derive(Parser)]

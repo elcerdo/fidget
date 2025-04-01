@@ -94,8 +94,7 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
     shape: fidget::shape::Shape<F>,
     settings: &options::ImageSettings,
     mode: &options::RenderMode3D,
-    isometric: bool,
-    use_default_camera: bool,
+    camera: &options::CameraSettings,
     model_transform: &options::TransformSettings,
     num_repeats: usize,
     num_threads: usize,
@@ -106,7 +105,7 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
             1.0 / model_transform.scale;
     }
 
-    if use_default_camera {
+    if !camera.no_default_position {
         let mat_aa = nalgebra::Rotation3::from_axis_angle(
             &nalgebra::Vector3::y_axis(),
             std::f32::consts::PI / -4.0,
@@ -130,7 +129,7 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
         mat = mat_elev * mat_rot * mat;
     }
 
-    if !isometric {
+    if !camera.is_isometric {
         *mat.matrix_mut().get_mut((3, 2)).unwrap() = 0.3;
     }
 
@@ -308,7 +307,7 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
             let shaded_color =
                 fidget::render::effects::apply_shading(&image, *ssao, threads);
 
-            let foo = image
+            let image = image
                 .into_iter()
                 .zip(shaded_color)
                 .enumerate()
@@ -321,6 +320,7 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
                         let p_ = nalgebra::Vector4::new(x_, y_, z_, 1.0);
                         let p = screen_to_model * p_;
 
+                        // FIXME use kdtree
                         let mut min_data: Option<(f32, usize)> = None;
                         for (site_id, site_pos) in sites.iter().enumerate() {
                             let pos = p.xyz();
@@ -343,13 +343,9 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
                             rng.random_range(0.0..=1.0),
                         ];
                         if let Some((_, site_id)) = min_data {
-                            if !site_id_to_colors.contains_key(&site_id) {
-                                site_id_to_colors.insert(site_id, site_color);
-                            }
-                            site_color = site_id_to_colors
-                                .get(&site_id)
-                                .unwrap()
-                                .clone();
+                            site_color = *site_id_to_colors
+                                .entry(site_id)
+                                .or_insert(site_color);
                         }
 
                         [
@@ -368,7 +364,7 @@ fn run_render_3d<F: fidget::eval::Function + fidget::render::RenderHints>(
                 site_id_to_colors.len(),
                 sites.len()
             );
-            foo
+            image
         }
     };
 
@@ -572,16 +568,13 @@ pub fn run_action(
         ActionCommand::Render3d {
             settings,
             mode,
-            isometric,
-            use_default_camera,
+            camera,
             model_transform,
-            ssao,
-            no_denoise,
         } => {
             use options::Options;
             use options::RenderMode3D;
             use options::RenderMode3DArg;
-            if *ssao && !matches!(mode, RenderMode3DArg::Shaded) {
+            if camera.ssao && !matches!(mode, RenderMode3DArg::Shaded) {
                 let mut cmd = Options::command();
                 let sub = cmd.find_subcommand_mut("render3d").unwrap();
                 let error = sub.error(
@@ -590,7 +583,7 @@ pub fn run_action(
                 );
                 error.exit();
             }
-            if *no_denoise && matches!(mode, RenderMode3DArg::HeightMap) {
+            if camera.no_denoise && matches!(mode, RenderMode3DArg::HeightMap) {
                 let mut cmd = Options::command();
                 let sub = cmd.find_subcommand_mut("render3d").unwrap();
                 let error = sub.error(
@@ -599,10 +592,10 @@ pub fn run_action(
                 );
                 error.exit();
             }
-            let denoise = !no_denoise;
+            let denoise = !camera.no_denoise;
             let mode = match mode {
                 RenderMode3DArg::Shaded => RenderMode3D::Shaded {
-                    ssao: *ssao,
+                    ssao: camera.ssao,
                     denoise,
                 },
                 RenderMode3DArg::HeightMap => RenderMode3D::HeightMap,
@@ -617,7 +610,7 @@ pub fn run_action(
                 }
                 RenderMode3DArg::ModelPosition => RenderMode3D::ModelPosition,
                 RenderMode3DArg::NearestSite => RenderMode3D::NearestSite {
-                    ssao: *ssao,
+                    ssao: camera.ssao,
                     denoise,
                 },
             };
@@ -631,8 +624,7 @@ pub fn run_action(
                         shape,
                         settings,
                         &mode,
-                        *isometric,
-                        *use_default_camera,
+                        &camera,
                         model_transform,
                         args.num_repeats,
                         args.num_threads,
@@ -646,8 +638,7 @@ pub fn run_action(
                         shape,
                         settings,
                         &mode,
-                        *isometric,
-                        *use_default_camera,
+                        &camera,
                         model_transform,
                         args.num_repeats,
                         args.num_threads,
