@@ -42,12 +42,42 @@ pub enum HardcodedShape {
     SphereTree,
 }
 
-#[derive(ValueEnum, Clone)]
-pub enum ColorMode {
-    Depth,
-    CameraNormalMap,
-    ModelPosition,
-    NearestSite,
+// #[derive(strum::EnumDiscriminants, Clone)]
+// #[strum_discriminants(name(RenderMode3DArg), derive(ValueEnum))]
+#[derive(ValueEnum, Clone, Debug, Default)]
+pub enum RenderMode3D {
+    /// Pixels are colored based on height
+    #[default]
+    HeightMap,
+    // /// Pixels are colored based on normals
+    // Normals { denoise: bool },
+    // /// Pixels are shaded
+    // Shaded { denoise: bool, ssao: bool },
+    // /// Raw (unblurred) SSAO occlusion, for debugging
+    // RawOcclusion { denoise: bool },
+    // /// Blurred SSAO occlusion, for debugging
+    // BlurredOcclusion { denoise: bool },
+}
+
+// impl Default for RenderMode3DArg {
+//     fn default() -> Self {
+//         Self::HeightMap
+//     }
+// }
+
+#[derive(ValueEnum, Default, Clone)]
+pub enum RenderMode2D {
+    /// Pixels are colored based on interval results
+    #[default]
+    Debug,
+    /// Monochrome rendering (white-on-black)
+    Mono,
+    /// Approximate signed distance field visualization
+    SdfApprox,
+    /// Exact signed distance field visualization (more expensive)
+    SdfExact,
+    /// Brute-force (pixel-by-pixel) evaluation
+    Brute,
 }
 
 #[derive(Subcommand)]
@@ -67,22 +97,18 @@ pub enum ActionCommand {
         #[clap(flatten)]
         settings: ImageSettings,
 
-        /// Use brute-force (pixel-by-pixel) evaluation
-        #[clap(short, long)]
-        brute: bool,
-
-        /// Render as a color-gradient SDF
-        #[clap(long)]
-        sdf: bool,
+        /// Render mode
+        #[clap(long, value_enum, default_value_t)]
+        mode: RenderMode2D,
     },
 
     Render3d {
         #[clap(flatten)]
         settings: ImageSettings,
 
-        /// Render in color
-        #[clap(long, value_enum, default_value_t = ColorMode::Depth)]
-        color_mode: ColorMode,
+        /// Render mode
+        #[clap(long, value_enum, default_value_t)]
+        mode: RenderMode3D,
 
         /// Render using an isometric perspective
         #[clap(long)]
@@ -101,7 +127,7 @@ pub enum ActionCommand {
         model_scale: f32,
     },
 
-    Mesh {
+    RenderMesh {
         #[clap(flatten)]
         settings: MeshSettings,
     },
