@@ -6,3 +6,4 @@
 *.png
 *.stl
 *.ply
+!basic_*.png

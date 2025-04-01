@@ -1,3 +1,14 @@
+# My stuff
+
+I tweaked the CLI examples and added a few models.
+
+```sh
+cargo run -p basic --release -- -i models/alien.vm  render3d -o alien.png -m nearest-site -s 1.3
+```
+
+![basic_alien_sites](basic_alien_sites.png)
+
+
 # Fidget
 [![» Crate](https://badgen.net/crates/v/fidget)](https://crates.io/crates/fidget)
 [![» Docs](https://badgen.net/badge/api/docs.rs/df3600)](https://docs.rs/fidget/)

@@ -100,7 +100,7 @@ pub enum ActionCommand {
         settings: ImageSettings,
 
         /// Render mode
-        #[clap(long, value_enum, default_value_t)]
+        #[clap(short, long, value_enum, default_value_t)]
         mode: RenderMode2D,
     },
 
@@ -109,7 +109,7 @@ pub enum ActionCommand {
         settings: ImageSettings,
 
         /// Render mode
-        #[clap(long, value_enum, default_value_t)]
+        #[clap(short, long, value_enum, default_value_t)]
         mode: RenderMode3DArg,
 
         /// Camera settings
